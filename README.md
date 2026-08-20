@@ -5,8 +5,8 @@ status, with every request and callback recorded for audit.
 
 ## Status
 
-Early core. The provider protocol and the value objects it exchanges are in
-place; no concrete provider is implemented yet.
+Early core. The provider protocol, the value objects it exchanges and an
+in-memory provider are in place; no network provider is implemented yet.
 
 ## Installation
 
@@ -42,6 +42,52 @@ Three properties follow from returning failures instead of raising them:
 
 Callers that want the raising style keep it: `ProviderResponse.unwrap()` returns
 the `PaymentResult` or raises `PaymentFailed` with the error attached.
+
+## Reference implementation
+
+`FakeProvider` keeps its transactions in memory. It is the implementation to
+read when writing a real one, and the one to use in tests:
+
+```python
+from decimal import Decimal
+
+from payment_gateways import Declined, FakeProvider, Money, Operation
+
+provider = FakeProvider()
+
+hold = provider.hold(
+    order_id="order-1",
+    amount=Money(Decimal("40.00"), "EUR"),
+    idempotency_key="hold-order-1",
+).unwrap()
+
+capture = provider.capture(
+    transaction_id=hold.transaction_id,
+    idempotency_key="capture-order-1",
+    amount=Money(Decimal("25.00"), "EUR"),
+)
+assert capture.ok
+```
+
+Outcomes are scriptable, so error handling can be exercised without a network.
+A queued error is returned by the next call to that operation and leaves the
+transaction untouched:
+
+```python
+provider.fail_next(Operation.REFUND, Declined("refund window closed", code="R12"))
+
+refund = provider.refund(
+    transaction_id=hold.transaction_id,
+    idempotency_key="refund-order-1",
+)
+assert isinstance(refund.error, Declined)
+```
+
+Two more behaviours match what a real acquirer does: a successful call is
+replayed for a repeated idempotency key, while a failed one is not, so a
+retryable error can be retried under the same key. Every answered call, replays
+and failures included, is appended to `provider.calls` as a `ProviderResponse` —
+the audit trail in its smallest possible form.
 
 ## Development
 

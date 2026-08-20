@@ -8,6 +8,7 @@ from payment_gateways.errors import (
     PaymentFailed,
     ProviderError,
 )
+from payment_gateways.fake import FakeProvider
 from payment_gateways.models import (
     Operation,
     PaymentResult,
@@ -21,6 +22,7 @@ from payment_gateways.protocol import PaymentProvider
 __all__ = [
     "Declined",
     "ErrorKind",
+    "FakeProvider",
     "InvalidState",
     "Money",
     "NetworkError",
