@@ -5,8 +5,9 @@ status, with every request and callback recorded for audit.
 
 ## Status
 
-Early core. The provider protocol, the value objects it exchanges and an
-in-memory provider are in place; no network provider is implemented yet.
+Early core. The provider protocol, the value objects it exchanges, an in-memory
+provider and the audit trail are in place; no network provider is implemented
+yet.
 
 ## Installation
 
@@ -88,6 +89,47 @@ replayed for a repeated idempotency key, while a failed one is not, so a
 retryable error can be retried under the same key. Every answered call, replays
 and failures included, is appended to `provider.calls` as a `ProviderResponse` —
 the audit trail in its smallest possible form.
+
+## Audit
+
+Auditing is a wrapper, not a provider feature: `AuditedProvider` implements the
+same protocol, forwards each call and writes an `AuditRecord` — request,
+response, duration, error — to an `AuditSink`.
+
+```python
+from decimal import Decimal
+
+from payment_gateways import AuditedProvider, FakeProvider, InMemoryAuditSink, Money
+
+sink = InMemoryAuditSink()
+provider = AuditedProvider(FakeProvider(), sink)
+
+provider.hold(
+    order_id="order-1",
+    amount=Money(Decimal("40.00"), "EUR"),
+    idempotency_key="hold-order-1",
+    metadata={"card_number": "4111111111111111", "channel": "web"},
+)
+
+record = sink.records[0]
+assert record.request.metadata == {"card_number": "***", "channel": "web"}
+assert record.duration_ms is not None
+```
+
+A sink is anything with `record(AuditRecord) -> None`, so a database writer or a
+queue producer drops in without changing call sites. Inbound callbacks go to the
+same trail through `record_callback(sink, response)`, tagged `Origin.CALLBACK`.
+
+Three rules hold for everything the trail receives:
+
+- **Secrets never reach the sink.** Values under keys that look like card data,
+  tokens, signatures or passwords are replaced by `***` before the record is
+  handed over, including inside nested payloads.
+- **A failing sink cannot fail a payment.** Sink errors are logged and dropped;
+  the payment result reaches the caller untouched.
+- **Unexpected exceptions are recorded too.** If a provider raises rather than
+  returning an error, the record carries the exception and the call still
+  propagates.
 
 ## Development
 

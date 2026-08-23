@@ -1,5 +1,15 @@
 """Payment provider abstraction with auditable operations."""
 
+from payment_gateways.audit import (
+    REDACTED,
+    AuditedProvider,
+    AuditRecord,
+    AuditSink,
+    InMemoryAuditSink,
+    Origin,
+    record_callback,
+    redact,
+)
 from payment_gateways.errors import (
     Declined,
     ErrorKind,
@@ -20,13 +30,19 @@ from payment_gateways.money import Money
 from payment_gateways.protocol import PaymentProvider
 
 __all__ = [
+    "REDACTED",
+    "AuditRecord",
+    "AuditSink",
+    "AuditedProvider",
     "Declined",
     "ErrorKind",
     "FakeProvider",
+    "InMemoryAuditSink",
     "InvalidState",
     "Money",
     "NetworkError",
     "Operation",
+    "Origin",
     "PaymentFailed",
     "PaymentProvider",
     "PaymentResult",
@@ -35,6 +51,8 @@ __all__ = [
     "ProviderRequest",
     "ProviderResponse",
     "__version__",
+    "record_callback",
+    "redact",
 ]
 
 __version__ = "0.1.0"
