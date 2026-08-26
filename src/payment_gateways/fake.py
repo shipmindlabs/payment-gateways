@@ -1,9 +1,10 @@
 """In-memory provider for tests, examples and documentation.
 
 `FakeProvider` is the reference implementation of `PaymentProvider`: it runs the
-transaction state machine every real provider is expected to expose, records
-every call it answers, and lets a test script the next outcome of any operation
-so that decline and network handling can be exercised without a network.
+transaction state machine every real provider is expected to expose, applies the
+idempotency rules a real acquirer applies, records every call it answers, and
+lets a test script the next outcome of any operation so that decline and network
+handling can be exercised without a network.
 """
 
 from __future__ import annotations
@@ -16,7 +17,8 @@ from decimal import Decimal
 from itertools import count
 from typing import Any
 
-from payment_gateways.errors import InvalidState, ProviderError
+from payment_gateways.errors import IdempotencyConflict, InvalidState, ProviderError
+from payment_gateways.idempotency import IdempotencyStore
 from payment_gateways.models import (
     Operation,
     PaymentResult,
@@ -62,10 +64,12 @@ def _check_amount(amount: Money, available: Money) -> InvalidState | None:
 class FakeProvider:
     """A payment provider that keeps every transaction in memory.
 
-    Successful responses are stored under their idempotency key and replayed for
-    a repeated call; failed ones are not, so a retryable error can be retried
-    with the same key. `fail_next` queues an error to return from the next call
-    to an operation, which leaves the transaction untouched.
+    A successful response is stored under its idempotency key and replayed for a
+    repeated call, so a retry never charges twice; a failed one is not stored, so
+    a retryable error can be retried under the same key; a key that comes back
+    with a different request is answered with `IdempotencyConflict` and changes
+    nothing. `fail_next` queues an error to return from the next call to an
+    operation, which leaves the transaction untouched.
     """
 
     def __init__(
@@ -78,7 +82,7 @@ class FakeProvider:
         self.calls: list[ProviderResponse] = []
         self._clock = clock or _utcnow
         self._transactions: dict[str, _Transaction] = {}
-        self._replays: dict[tuple[Operation, str], ProviderResponse] = {}
+        self._idempotency = IdempotencyStore()
         self._scripted: dict[Operation, deque[ProviderError]] = {}
         self._ids = count(1)
 
@@ -272,17 +276,20 @@ class FakeProvider:
         )
 
     def _short_circuit(self, request: ProviderRequest) -> ProviderResponse | None:
-        if request.idempotency_key is not None:
-            replay = self._replays.get((request.operation, request.idempotency_key))
-            if replay is not None:
-                return self._record(
-                    ProviderResponse(
-                        request=request,
-                        result=replay.result,
-                        received_at=self._clock(),
-                        raw={"replayed": True},
-                    )
+        # A key that already carries an answer settles the call before anything
+        # else, scripted failures included: a stored success must never run twice.
+        replay = self._idempotency.replay(request)
+        if isinstance(replay, IdempotencyConflict):
+            return self._fail(request, replay)
+        if replay is not None:
+            return self._record(
+                ProviderResponse(
+                    request=request,
+                    result=replay,
+                    received_at=self._clock(),
+                    raw={"replayed": True},
                 )
+            )
         queued = self._scripted.get(request.operation)
         if queued:
             return self._fail(request, queued.popleft())
@@ -310,9 +317,7 @@ class FakeProvider:
 
     def _record(self, response: ProviderResponse) -> ProviderResponse:
         self.calls.append(response)
-        key = response.request.idempotency_key
-        if response.ok and key is not None:
-            self._replays.setdefault((response.request.operation, key), response)
+        self._idempotency.record(response)
         return response
 
     @staticmethod

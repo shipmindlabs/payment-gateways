@@ -13,12 +13,14 @@ from payment_gateways.audit import (
 from payment_gateways.errors import (
     Declined,
     ErrorKind,
+    IdempotencyConflict,
     InvalidState,
     NetworkError,
     PaymentFailed,
     ProviderError,
 )
 from payment_gateways.fake import FakeProvider
+from payment_gateways.idempotency import IdempotencyStore, request_fingerprint
 from payment_gateways.models import (
     Operation,
     PaymentResult,
@@ -37,6 +39,8 @@ __all__ = [
     "Declined",
     "ErrorKind",
     "FakeProvider",
+    "IdempotencyConflict",
+    "IdempotencyStore",
     "InMemoryAuditSink",
     "InvalidState",
     "Money",
@@ -53,6 +57,7 @@ __all__ = [
     "__version__",
     "record_callback",
     "redact",
+    "request_fingerprint",
 ]
 
 __version__ = "0.1.0"

@@ -3,6 +3,13 @@
 Every operation answers with a `ProviderResponse`: the request as it was sent,
 paired with either a `PaymentResult` or a `ProviderError`, so the whole call can
 go to the audit trail before the caller reacts to it.
+
+Every operation that moves money takes an `idempotency_key`, and an
+implementation is expected to honour it: a repeated key returns the answer that
+key already produced instead of executing the operation a second time, a failed
+answer leaves the key free for a retry, and a key that returns with a different
+request is refused with `IdempotencyConflict`. `payment_gateways.idempotency`
+holds the store the reference implementation uses for exactly that.
 """
 
 from __future__ import annotations
@@ -72,5 +79,8 @@ class PaymentProvider(Protocol):
         ...
 
     def status(self, *, transaction_id: str) -> ProviderResponse:
-        """Read the current state of a transaction from the provider."""
+        """Read the current state of a transaction from the provider.
+
+        Reads take no idempotency key: repeating one moves nothing.
+        """
         ...

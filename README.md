@@ -6,8 +6,8 @@ status, with every request and callback recorded for audit.
 ## Status
 
 Early core. The provider protocol, the value objects it exchanges, an in-memory
-provider and the audit trail are in place; no network provider is implemented
-yet.
+provider, the idempotency rules and the audit trail are in place; no network
+provider is implemented yet.
 
 ## Installation
 
@@ -25,8 +25,8 @@ object cannot be edited after the fact:
   were sent.
 - `ProviderResponse` — that request paired with exactly one of a
   `PaymentResult` or a `ProviderError`.
-- `Declined`, `NetworkError`, `InvalidState` — the three failure shapes, each
-  carrying the provider's own code and raw payload.
+- `Declined`, `NetworkError`, `InvalidState`, `IdempotencyConflict` — the four
+  failure shapes, each carrying the provider's own code and raw payload.
 
 ## Why errors are values, not only exceptions
 
@@ -43,6 +43,59 @@ Three properties follow from returning failures instead of raising them:
 
 Callers that want the raising style keep it: `ProviderResponse.unwrap()` returns
 the `PaymentResult` or raises `PaymentFailed` with the error attached.
+
+## Idempotency
+
+Every operation that moves money takes an `idempotency_key`. A network error
+never says whether the request was executed, so the only safe reaction is to send
+it again under the same key.
+
+What a provider guarantees for that key:
+
+- **A repeat never charges twice.** The first successful answer for a key is
+  stored and returned again — flagged by `ProviderResponse.replayed` — without
+  the transaction being touched a second time.
+- **A failure does not claim the key.** Failed answers are not stored, so a
+  `NetworkError` can be retried under the very key that failed.
+- **A reused key is refused, not replayed.** If a key returns with different
+  money-moving fields — operation, order, transaction or amount — the call is
+  answered with `IdempotencyConflict` and nothing is executed. Metadata and
+  timestamps are not part of that comparison.
+- **Replays are audited.** A replayed call is a real answer to a real request and
+  reaches `provider.calls` and the audit sink like any other.
+
+```python
+first = provider.hold(
+    order_id="order-1",
+    amount=Money(Decimal("40.00"), "EUR"),
+    idempotency_key="hold-order-1",
+)
+retry = provider.hold(
+    order_id="order-1",
+    amount=Money(Decimal("40.00"), "EUR"),
+    idempotency_key="hold-order-1",
+)
+assert retry.replayed
+assert retry.unwrap().transaction_id == first.unwrap().transaction_id
+```
+
+The guarantees are only worth as much as the keys handed to them, which is the
+caller's side of the deal:
+
+- **Derive the key from the operation, never generate it per attempt.** Something
+  like `f"capture:{order_id}"` is stable across retries; a fresh UUID per attempt
+  is a new operation every time, and that is how double charges happen.
+- **Persist the key before the call.** Store it with the order, not in memory, or
+  a crash mid-call leaves the retry unable to recognise itself.
+- **One key per operation.** The hold, the capture and the refund of one order
+  each need their own key; the same key across two of them is a conflict.
+- **Change the request, change the key.** Capturing a different amount is a
+  different operation, not a retry.
+- **Retry only what is retryable.** `NetworkError.retryable` is true; a `Declined`
+  or an `IdempotencyConflict` will answer the same way however often it is sent.
+
+`IdempotencyStore` implements these rules and is reusable: an implementation of
+the protocol can hold one and ask it before every call, as `FakeProvider` does.
 
 ## Reference implementation
 
@@ -84,11 +137,10 @@ refund = provider.refund(
 assert isinstance(refund.error, Declined)
 ```
 
-Two more behaviours match what a real acquirer does: a successful call is
-replayed for a repeated idempotency key, while a failed one is not, so a
-retryable error can be retried under the same key. Every answered call, replays
-and failures included, is appended to `provider.calls` as a `ProviderResponse` —
-the audit trail in its smallest possible form.
+A stored key still wins over a queued failure, because a completed operation may
+not run again. Every answered call — replays, conflicts and failures included —
+is appended to `provider.calls` as a `ProviderResponse`: the audit trail in its
+smallest possible form.
 
 ## Audit
 

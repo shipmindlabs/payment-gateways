@@ -19,6 +19,7 @@ from typing import Any, ClassVar
 __all__ = [
     "Declined",
     "ErrorKind",
+    "IdempotencyConflict",
     "InvalidState",
     "NetworkError",
     "PaymentFailed",
@@ -32,6 +33,7 @@ class ErrorKind(str, Enum):
     DECLINED = "declined"
     NETWORK = "network"
     INVALID_STATE = "invalid_state"
+    IDEMPOTENCY_CONFLICT = "idempotency_conflict"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +73,17 @@ class InvalidState(ProviderError):
     """The operation does not apply to the current state of the transaction."""
 
     kind: ClassVar[ErrorKind] = ErrorKind.INVALID_STATE
+
+
+@dataclass(frozen=True, slots=True)
+class IdempotencyConflict(ProviderError):
+    """The idempotency key already belongs to a different request.
+
+    Nothing was executed. Retrying under the same key cannot succeed: either the
+    earlier call was the intended one, or this call needs a key of its own.
+    """
+
+    kind: ClassVar[ErrorKind] = ErrorKind.IDEMPOTENCY_CONFLICT
 
 
 class PaymentFailed(Exception):

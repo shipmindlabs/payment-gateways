@@ -68,6 +68,12 @@ class ProviderRequest:
     metadata: Mapping[str, Any] = field(default_factory=dict)
     created_at: datetime | None = None
 
+    def __post_init__(self) -> None:
+        # A blank key looks like a key but collides with every other blank one,
+        # which would replay unrelated operations onto each other.
+        if self.idempotency_key is not None and not self.idempotency_key.strip():
+            raise ValueError("idempotency_key must not be blank")
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderResponse:
@@ -86,6 +92,11 @@ class ProviderResponse:
     @property
     def ok(self) -> bool:
         return self.error is None
+
+    @property
+    def replayed(self) -> bool:
+        """True when the provider answered from a stored idempotency key."""
+        return bool(self.raw.get("replayed", False))
 
     def unwrap(self) -> PaymentResult:
         """Return the result, raising `PaymentFailed` for a failed operation."""
