@@ -6,8 +6,8 @@ status, with every request and callback recorded for audit.
 ## Status
 
 Early core. The provider protocol, the value objects it exchanges, an in-memory
-provider, the idempotency rules and the audit trail are in place; no network
-provider is implemented yet.
+provider, the idempotency rules, the audit trail and the contract test are in
+place; no network provider is implemented yet.
 
 ## Installation
 
@@ -183,10 +183,35 @@ Three rules hold for everything the trail receives:
   returning an error, the record carries the exception and the call still
   propagates.
 
+## Contract test
+
+The promises above are what a provider owes its callers, and none of them is
+visible in a signature. `PaymentProviderContract` turns them into tests an
+implementation runs against itself:
+
+```python
+from payment_gateways import FakeProvider
+from payment_gateways.contract import PaymentProviderContract
+
+
+class TestFakeProvider(PaymentProviderContract):
+    def make_provider(self):
+        return FakeProvider()
+```
+
+The suite drives the whole lifecycle, checks what each state refuses, and holds
+the provider to the idempotency rules: a repeat replays instead of charging
+again, a failure leaves its key free, a reused key is answered with a conflict
+and executes nothing. It reaches the provider only through the protocol and
+asserts with plain `assert`, so a wrapper such as `AuditedProvider` subclasses it
+the same way an acquirer client does. Providers that do not settle in EUR
+override the `currency` and `foreign_currency` attributes.
+
 ## Development
 
 ```bash
-pip install -e .
+pip install -e ".[test]"
+python -m pytest
 ```
 
 ## License

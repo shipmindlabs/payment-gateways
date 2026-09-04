@@ -24,6 +24,9 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
 [project.urls]
 Homepage = "https://github.com/shipmindlabs/payment-gateways"
 Source = "https://github.com/shipmindlabs/payment-gateways"
@@ -33,4 +36,8 @@ Issues = "https://github.com/shipmindlabs/payment-gateways/issues"
 packages = ["src/payment_gateways"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "README.md", "LICENSE"]
+include = ["src", "tests", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
