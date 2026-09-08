@@ -3,6 +3,29 @@
 Payment provider abstraction: one protocol for hold, capture, refund, cancel and
 status, with every request and callback recorded for audit.
 
+## Why this exists
+
+Taking the money is rarely the hard part. The hard part is everything around it:
+
+- **Every acquirer has its own vocabulary.** One calls it an authorization, the
+  next a pre-auth, a third only settles on charge. Code written against one
+  SDK is code that has to be rewritten to add a second provider, or to leave
+  the first.
+- **Retries are unavoidable and dangerous.** A timeout never says whether the
+  charge happened. Sending it again is the only safe reaction, and it is also
+  how a customer gets billed twice, unless the provider recognises the retry.
+- **Failure is the normal path.** Declines, expired holds, closed refund
+  windows: those are outcomes of taking payments, not exceptional events, and
+  they belong at the call site rather than unwinding past it.
+- **Somebody will ask what happened.** Support, finance, a chargeback, an
+  auditor. If the trail is a log line written when someone remembered to write
+  one, the answer is a reconstruction.
+
+This library fixes one small surface for all of that: six operations, failures
+returned as values, idempotency rules a provider is held to, and an audit
+wrapper that records the exchange whether it succeeded, failed or raised.
+Providers plug in behind it; the call sites never learn which one is in use.
+
 ## Status
 
 Early core. The provider protocol, the value objects it exchanges, an in-memory
@@ -14,6 +37,35 @@ place; no network provider is implemented yet.
 ```bash
 pip install payment-gateways
 ```
+
+## Quickstart
+
+Hold, settle, and keep the trail — the whole surface in one screen:
+
+```python
+from decimal import Decimal
+
+from payment_gateways import AuditedProvider, FakeProvider, InMemoryAuditSink, Money
+
+sink = InMemoryAuditSink()
+provider = AuditedProvider(FakeProvider(), sink)
+
+hold = provider.hold(
+    order_id="order-1",
+    amount=Money(Decimal("40.00"), "EUR"),
+    idempotency_key="hold:order-1",
+)
+if not hold.ok:
+    raise SystemExit(f"hold refused: {hold.error}")
+
+capture = provider.capture(
+    transaction_id=hold.unwrap().transaction_id,
+    idempotency_key="capture:order-1",
+)
+print(capture.unwrap().status.value, len(sink.records))  # captured 2
+```
+
+Swap `FakeProvider()` for a real implementation and nothing above changes.
 
 ## Value objects
 
@@ -96,6 +148,36 @@ caller's side of the deal:
 
 `IdempotencyStore` implements these rules and is reusable: an implementation of
 the protocol can hold one and ask it before every call, as `FakeProvider` does.
+
+## Plugging in a provider
+
+A provider is any object that satisfies `PaymentProvider` — there is no base
+class to inherit and nothing to register. What the protocol expects of it, in
+the order it is worth working through:
+
+1. **Implement the six operations with the signatures in `protocol.py`.** They
+   are keyword-only, so an argument cannot slip into the wrong position; a
+   `status` read takes no idempotency key.
+2. **Answer with a `ProviderResponse`, always.** It carries the request as it was
+   sent plus exactly one of a result or an error, which is what makes the whole
+   exchange recordable before the caller reacts.
+3. **Map the acquirer's failures onto the four error shapes.** Keep its own code
+   and payload in `code` and `raw`: the shape decides whether a retry makes
+   sense, the raw fields are what an investigation needs.
+4. **Refuse what the state does not allow.** Capturing a cancelled hold or
+   refunding an uncaptured one answers with `InvalidState` and changes nothing.
+5. **Honour the idempotency key.** Ask an `IdempotencyStore` before executing and
+   record the answer after, the way `FakeProvider` does; a repeat replays, a
+   failure frees its key, a mismatch conflicts.
+6. **Report `result.amount` as the protocol promises:** the authorized amount
+   while held, captured minus refunded once settled, zero when cancelled or
+   fully refunded.
+7. **Give the provider a `name`.** It lands on every request and every audit
+   record, so a trail spanning two acquirers stays readable.
+8. **Leave auditing out of it.** Recording is `AuditedProvider`'s job; a provider
+   that logs on its own duplicates the trail and diverges from it.
+9. **Run the contract test.** Subclass `PaymentProviderContract` and the promises
+   above stop being prose.
 
 ## Reference implementation
 
