@@ -103,6 +103,16 @@ class PaymentProviderContract:
     def _conflict(self, response: ProviderResponse) -> ProviderError:
         return self._refused(response, ErrorKind.IDEMPOTENCY_CONFLICT)
 
+    # --- the amounts a provider may be asked for --------------------------
+
+    def test_money_refuses_a_non_finite_amount(self) -> None:
+        for amount in ("NaN", "sNaN", "Infinity", "-Infinity"):
+            try:
+                Money(Decimal(amount), self.currency)
+            except ValueError:
+                continue
+            raise AssertionError(f"Money must refuse {amount}")
+
     # --- shape of every answer -------------------------------------------
 
     def test_provider_satisfies_the_protocol(self) -> None:
@@ -185,6 +195,15 @@ class PaymentProviderContract:
         assert result.amount.currency == self.currency
         assert result.provider == provider.name
         assert result.transaction_id
+
+    def test_hold_of_a_non_positive_amount_is_refused(self) -> None:
+        provider = self.make_provider()
+        for amount in ("0.00", "-5.00"):
+            key = self.key("hold")
+            self._invalid(self._hold(provider, amount=amount, idempotency_key=key))
+            # The refusal authorized nothing, so its key is still free.
+            retried = self._hold(provider, amount="40.00", idempotency_key=key)
+            assert retried.unwrap().status is PaymentStatus.AUTHORIZED
 
     def test_status_reports_a_hold_as_authorized(self) -> None:
         provider = self.make_provider()

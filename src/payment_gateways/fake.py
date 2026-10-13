@@ -49,13 +49,20 @@ class _Transaction:
     refunded: Decimal = _ZERO
 
 
+def _check_positive(amount: Money) -> InvalidState | None:
+    if amount.amount <= _ZERO:
+        return InvalidState("amount must be positive")
+    return None
+
+
 def _check_amount(amount: Money, available: Money) -> InvalidState | None:
     if amount.currency != available.currency:
         return InvalidState(
             f"amount is in {amount.currency}, transaction is in {available.currency}"
         )
-    if amount.amount <= _ZERO:
-        return InvalidState("amount must be positive")
+    invalid = _check_positive(amount)
+    if invalid is not None:
+        return invalid
     if amount.amount > available.amount:
         return InvalidState(f"amount {amount} exceeds the available {available}")
     return None
@@ -108,6 +115,9 @@ class FakeProvider:
         early = self._short_circuit(request)
         if early is not None:
             return early
+        invalid = _check_positive(amount)
+        if invalid is not None:
+            return self._fail(request, invalid)
         transaction = _Transaction(
             transaction_id=f"{self.name}-{next(self._ids)}",
             order_id=order_id,
