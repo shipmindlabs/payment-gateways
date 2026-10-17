@@ -30,6 +30,7 @@ from payment_gateways.models import (
 )
 from payment_gateways.money import Money
 from payment_gateways.protocol import PaymentProvider
+from payment_gateways.retry import RetryingProvider
 
 __all__ = [
     "REDACTED",
@@ -54,6 +55,7 @@ __all__ = [
     "ProviderError",
     "ProviderRequest",
     "ProviderResponse",
+    "RetryingProvider",
     "__version__",
     "record_callback",
     "redact",

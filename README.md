@@ -29,8 +29,8 @@ Providers plug in behind it; the call sites never learn which one is in use.
 ## Status
 
 Early core. The provider protocol, the value objects it exchanges, an in-memory
-provider, the idempotency rules, the audit trail and the contract test are in
-place; no network provider is implemented yet.
+provider, the idempotency rules, the audit trail, the retry wrapper and the
+contract test are in place; no network provider is implemented yet.
 
 ## Installation
 
@@ -145,9 +145,49 @@ caller's side of the deal:
   different operation, not a retry.
 - **Retry only what is retryable.** `NetworkError.retryable` is true; a `Declined`
   or an `IdempotencyConflict` will answer the same way however often it is sent.
+  `RetryingProvider` applies that rule for you.
 
 `IdempotencyStore` implements these rules and is reusable: an implementation of
 the protocol can hold one and ask it before every call, as `FakeProvider` does.
+
+## Retries
+
+A `NetworkError` is the one failure worth sending again: it does not say that the
+acquirer refused the request, only that the answer never arrived.
+`RetryingProvider` wraps any provider and does exactly that, under the key the
+caller already chose:
+
+```python
+from decimal import Decimal
+
+from payment_gateways import FakeProvider, Money, RetryingProvider
+
+provider = RetryingProvider(FakeProvider(), attempts=3, backoff=0.2)
+
+hold = provider.hold(
+    order_id="order-1",
+    amount=Money(Decimal("40.00"), "EUR"),
+    idempotency_key="hold-order-1",
+)
+```
+
+- **Only a retryable error is resent.** `Declined`, `InvalidState` and
+  `IdempotencyConflict` answer the same way however often they are sent, so they
+  come straight back to the caller.
+- **Every attempt carries the same key.** A retry is the same operation, so the
+  provider recognises it and replays instead of charging twice.
+- **The last error is the answer.** After `attempts` tries the response of the
+  final attempt is returned as it is, failure included: a retry policy decides
+  when to stop trying, not what to do instead.
+- **The wait is injectable.** `sleep` defaults to `time.sleep`; a test passes its
+  own and asserts the delays, which grow by `multiplier` up to `max_backoff`.
+- **A raised exception is not retried.** It is not an answer, and a provider that
+  raises broke its side of the protocol; it travels up untouched.
+
+It is a `PaymentProvider` like the one it wraps, so the two wrappers compose in
+either order: `RetryingProvider(AuditedProvider(...))` writes a record per
+attempt, `AuditedProvider(RetryingProvider(...))` records only the answer the
+caller saw.
 
 ## Plugging in a provider
 
@@ -174,8 +214,8 @@ the order it is worth working through:
    fully refunded.
 7. **Give the provider a `name`.** It lands on every request and every audit
    record, so a trail spanning two acquirers stays readable.
-8. **Leave auditing out of it.** Recording is `AuditedProvider`'s job; a provider
-   that logs on its own duplicates the trail and diverges from it.
+8. **Leave auditing and retrying out of it.** Both are wrappers; a provider that
+   logs or retries on its own duplicates the trail and diverges from it.
 9. **Run the contract test.** Subclass `PaymentProviderContract` and the promises
    above stop being prose.
 
@@ -285,9 +325,10 @@ The suite drives the whole lifecycle, checks what each state refuses, and holds
 the provider to the idempotency rules: a repeat replays instead of charging
 again, a failure leaves its key free, a reused key is answered with a conflict
 and executes nothing. It reaches the provider only through the protocol and
-asserts with plain `assert`, so a wrapper such as `AuditedProvider` subclasses it
-the same way an acquirer client does. Providers that do not settle in EUR
-override the `currency` and `foreign_currency` attributes.
+asserts with plain `assert`, so a wrapper such as `AuditedProvider` or
+`RetryingProvider` subclasses it the same way an acquirer client does. Providers
+that do not settle in EUR override the `currency` and `foreign_currency`
+attributes.
 
 ## Development
 
