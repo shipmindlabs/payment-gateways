@@ -264,6 +264,58 @@ not run again. Every answered call — replays, conflicts and failures included 
 is appended to `provider.calls` as a `ProviderResponse`: the audit trail in its
 smallest possible form.
 
+## Pending holds
+
+Not every acquirer decides a hold while the caller waits. Some accept the
+request, answer with a pending transaction and report the decision later over a
+callback — which is what `PaymentStatus.PENDING` is for, and why nothing may be
+captured while it holds: no money was authorized yet. `FakeProvider` scripts
+that path too, so the waiting state can be exercised without an acquirer:
+
+```python
+from decimal import Decimal
+
+from payment_gateways import (
+    FakeProvider,
+    InMemoryAuditSink,
+    Money,
+    PaymentStatus,
+    record_callback,
+)
+
+sink = InMemoryAuditSink()
+provider = FakeProvider()
+provider.pending_next()
+
+hold = provider.hold(
+    order_id="order-1",
+    amount=Money(Decimal("40.00"), "EUR"),
+    idempotency_key="hold-order-1",
+).unwrap()
+assert hold.status is PaymentStatus.PENDING
+
+settled = provider.callback(
+    transaction_id=hold.transaction_id,
+    outcome=PaymentStatus.AUTHORIZED,
+)
+record_callback(sink, settled)
+assert settled.unwrap().status is PaymentStatus.AUTHORIZED
+```
+
+- **A pending hold refuses everything but a callback.** Capture, cancel and
+  either refund answer with `InvalidState` and change nothing; `status` keeps
+  reporting the amount that was asked for.
+- **A callback decides the hold once.** `AUTHORIZED` turns it into an ordinary
+  hold the caller can capture, `FAILED` ends it with nothing owed, and any other
+  outcome is refused. A second callback finds nothing pending.
+- **The decision is an answer like any other.** It carries `Operation.CALLBACK`
+  and no idempotency key — the caller never sent it — reaches `provider.calls`,
+  and goes to the trail through `record_callback`, tagged `Origin.CALLBACK`.
+
+Receiving the callback is not part of `PaymentProvider`: a real provider gets it
+as an inbound HTTP request, verifies its signature and maps it onto a
+`ProviderResponse` of exactly this shape before recording it.
+
 ## Audit
 
 Auditing is a wrapper, not a provider feature: `AuditedProvider` implements the

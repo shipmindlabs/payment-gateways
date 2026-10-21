@@ -3,8 +3,8 @@
 `FakeProvider` is the reference implementation of `PaymentProvider`: it runs the
 transaction state machine every real provider is expected to expose, applies the
 idempotency rules a real acquirer applies, records every call it answers, and
-lets a test script the next outcome of any operation so that decline and network
-handling can be exercised without a network.
+lets a test script the next outcome of any operation so that decline, network
+and pending handling can be exercised without a network.
 """
 
 from __future__ import annotations
@@ -76,7 +76,8 @@ class FakeProvider:
     a retryable error can be retried under the same key; a key that comes back
     with a different request is answered with `IdempotencyConflict` and changes
     nothing. `fail_next` queues an error to return from the next call to an
-    operation, which leaves the transaction untouched.
+    operation, which leaves the transaction untouched, and `pending_next` leaves
+    the next hold undecided until `callback` settles it.
     """
 
     def __init__(
@@ -91,11 +92,16 @@ class FakeProvider:
         self._transactions: dict[str, _Transaction] = {}
         self._idempotency = IdempotencyStore()
         self._scripted: dict[Operation, deque[ProviderError]] = {}
+        self._pending = 0
         self._ids = count(1)
 
     def fail_next(self, operation: Operation, error: ProviderError) -> None:
         """Answer the next call to `operation` with `error`, changing no state."""
         self._scripted.setdefault(operation, deque()).append(error)
+
+    def pending_next(self) -> None:
+        """Leave the next hold PENDING, for `callback` to settle later."""
+        self._pending += 1
 
     def hold(
         self,
@@ -118,11 +124,15 @@ class FakeProvider:
         invalid = _check_positive(amount)
         if invalid is not None:
             return self._fail(request, invalid)
+        status = PaymentStatus.AUTHORIZED
+        if self._pending:
+            self._pending -= 1
+            status = PaymentStatus.PENDING
         transaction = _Transaction(
             transaction_id=f"{self.name}-{next(self._ids)}",
             order_id=order_id,
             authorized=amount,
-            status=PaymentStatus.AUTHORIZED,
+            status=status,
         )
         self._transactions[transaction.transaction_id] = transaction
         return self._succeed(request, transaction)
@@ -264,6 +274,39 @@ class FakeProvider:
             return self._fail(request, InvalidState(f"unknown transaction {transaction_id}"))
         return self._succeed(request, transaction)
 
+    def callback(
+        self,
+        *,
+        transaction_id: str,
+        outcome: PaymentStatus,
+    ) -> ProviderResponse:
+        """Settle a pending hold the way an inbound provider callback would.
+
+        `outcome` is AUTHORIZED or FAILED: a callback decides a hold the provider
+        accepted without deciding, nothing else. The answer carries
+        `Operation.CALLBACK` and no idempotency key — the caller never sent this
+        exchange — and is recordable like any other response.
+        """
+        request = self._request(Operation.CALLBACK, transaction_id=transaction_id)
+        early = self._short_circuit(request)
+        if early is not None:
+            return early
+        transaction = self._transactions.get(transaction_id)
+        if transaction is None:
+            return self._fail(request, InvalidState(f"unknown transaction {transaction_id}"))
+        if transaction.status is not PaymentStatus.PENDING:
+            return self._fail(
+                request,
+                InvalidState(f"cannot settle a {transaction.status.value} transaction"),
+            )
+        if outcome not in (PaymentStatus.AUTHORIZED, PaymentStatus.FAILED):
+            return self._fail(
+                request,
+                InvalidState(f"a callback cannot settle a hold as {outcome.value}"),
+            )
+        transaction.status = outcome
+        return self._succeed(request, transaction)
+
     def _request(
         self,
         operation: Operation,
@@ -334,7 +377,7 @@ class FakeProvider:
     def _outstanding(transaction: _Transaction) -> Money:
         """What the transaction currently stands at against the payer."""
         currency = transaction.authorized.currency
-        if transaction.status is PaymentStatus.CANCELLED:
+        if transaction.status in (PaymentStatus.CANCELLED, PaymentStatus.FAILED):
             return Money(_ZERO, currency)
         if transaction.captured > _ZERO:
             return Money(transaction.captured - transaction.refunded, currency)

@@ -33,7 +33,11 @@ class PaymentStatus(str, Enum):
 
 
 class Operation(str, Enum):
-    """The provider calls that appear in the audit trail."""
+    """The provider exchanges that appear in the audit trail.
+
+    All but `CALLBACK` are calls the caller makes; a callback is the provider
+    reporting the outcome of one of them on its own initiative.
+    """
 
     HOLD = "hold"
     CAPTURE = "capture"
@@ -41,6 +45,7 @@ class Operation(str, Enum):
     PARTIAL_REFUND = "partial_refund"
     CANCEL = "cancel"
     STATUS = "status"
+    CALLBACK = "callback"
 
 
 @dataclass(frozen=True, slots=True)
