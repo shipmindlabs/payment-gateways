@@ -21,6 +21,7 @@ from payment_gateways.errors import (
 )
 from payment_gateways.fake import FakeProvider
 from payment_gateways.idempotency import IdempotencyStore, request_fingerprint
+from payment_gateways.jsonl import JsonlAuditSink, record_to_dict
 from payment_gateways.models import (
     Operation,
     PaymentResult,
@@ -44,6 +45,7 @@ __all__ = [
     "IdempotencyStore",
     "InMemoryAuditSink",
     "InvalidState",
+    "JsonlAuditSink",
     "Money",
     "NetworkError",
     "Operation",
@@ -58,6 +60,7 @@ __all__ = [
     "RetryingProvider",
     "__version__",
     "record_callback",
+    "record_to_dict",
     "redact",
     "request_fingerprint",
 ]

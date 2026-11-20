@@ -29,8 +29,9 @@ Providers plug in behind it; the call sites never learn which one is in use.
 ## Status
 
 Early core. The provider protocol, the value objects it exchanges, an in-memory
-provider, the idempotency rules, the audit trail, the retry wrapper and the
-contract test are in place; no network provider is implemented yet.
+provider, the idempotency rules, the audit trail with an in-memory and a
+file-backed sink, the retry wrapper and the contract test are in place; no
+network provider is implemented yet.
 
 ## Installation
 
@@ -200,7 +201,7 @@ the order it is worth working through:
    `status` read takes no idempotency key.
 2. **Answer with a `ProviderResponse`, always.** It carries the request as it was
    sent plus exactly one of a result or an error, which is what makes the whole
-   exchange recordable before the caller reacts.
+   exchange recordable before the caller reacts to it.
 3. **Map the acquirer's failures onto the four error shapes.** Keep its own code
    and payload in `code` and `raw`: the shape decides whether a retry makes
    sense, the raw fields are what an investigation needs.
@@ -356,6 +357,44 @@ Three rules hold for everything the trail receives:
 - **Unexpected exceptions are recorded too.** If a provider raises rather than
   returning an error, the record carries the exception and the call still
   propagates.
+
+### A trail that outlives the process
+
+`InMemoryAuditSink` answers questions for the length of a run. A chargeback
+arrives weeks later, so the trail has to be somewhere else by then.
+`JsonlAuditSink` appends one JSON object per record to a file and flushes each
+one:
+
+```python
+from decimal import Decimal
+
+from payment_gateways import AuditedProvider, FakeProvider, JsonlAuditSink, Money
+
+with JsonlAuditSink("audit.jsonl") as sink:
+    provider = AuditedProvider(FakeProvider(), sink)
+    provider.hold(
+        order_id="order-1",
+        amount=Money(Decimal("40.00"), "EUR"),
+        idempotency_key="hold-order-1",
+    )
+```
+
+Reading it back is one `json.loads` per line, with no library needed at all.
+
+- **One line, one exchange.** It carries the request, the outcome, the duration,
+  the origin and the moment it was recorded; `record_to_dict` builds that object
+  on its own, for a sink that writes to a table or a queue instead.
+- **A record carries one request.** The copy the response echoes back is left out
+  of the line rather than written twice.
+- **Amounts stay exact.** `Money` is written as its decimal text and its
+  currency, never as a float a cent could round out of.
+- **The trail only grows.** The file is opened for appending, so a restart
+  continues the trail it finds instead of truncating it, and every record is
+  flushed as it is written rather than waiting in a buffer for a crash.
+- **A value JSON cannot hold is written as text.** A payload with an unexpected
+  object in it still produces a readable line.
+- **Redaction happens before the sink.** The wrapper replaced secret-looking
+  values already, so nothing in the file needs scrubbing afterwards.
 
 ## Contract test
 
